@@ -36,6 +36,7 @@ import struct
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 
 import numpy as np  # noqa: E402  (la pista de efectos se suma en numpy)
 from PIL import Image  # noqa: E402  (va con el motor de imagen)
@@ -89,6 +90,45 @@ def titulo(texto):
 
 
 # ------------------------------------------------------ 1. catalogo_visual
+
+def prueba_proponer_catalogo():
+    titulo("catalogo_visual.proponer: plantilla completa sin personajes fijos")
+    datos = {
+        "reparto": {"pipo": {"nombre": "Pipo", "descripcion": "a baby dragon"}},
+        "sets": {"huerto": {"descripcion": "a sunny vegetable garden"}},
+        "beats": [{"desde": "B001", "hasta": "B001", "set": "huerto",
+                   "personajes": ["pipo"]}],
+    }
+    bloques = [{"id": "B001", "texto": "Pipo estornuda en el huerto."}]
+    # Solo se doblan los servicios: la plantilla y la validacion son reales.
+    # No se llama al CLI ni se escribe el historico de tiempos del usuario.
+    with patch.object(catalogo_visual, "_llamar_claude",
+                      return_value=(json.dumps(datos), {})) as llamar, \
+         patch.object(catalogo_visual.estadisticas, "estimar",
+                      return_value={"segundos": 1}), \
+         patch.object(catalogo_visual.estadisticas, "anotar"):
+        for opciones in ({}, {
+                "brief": {"titulo": "La calabaza que estornudaba",
+                          "resumen": "Una aventura en el huerto"},
+                "peticion": "Conservar las alas verdes de Pipo",
+                "regla_personajes": "Pipo es un dragon bebe"}):
+            catalogo = catalogo_visual.proponer(bloques, **opciones)
+            instruccion = llamar.call_args.args[0]
+            ok(bloques[0]["texto"] in instruccion,
+               "la propuesta recibe el guion completo")
+            igual(catalogo["beats"][0]["personajes"], ["pipo"],
+                  "la respuesta conserva el reparto de cada video")
+            igual(catalogo["cobertura"], 1.0,
+                  "el catalogo cubre el bloque solicitado")
+            if opciones:
+                for texto in (opciones["brief"]["titulo"],
+                              opciones["brief"]["resumen"],
+                              opciones["peticion"], opciones["regla_personajes"]):
+                    ok(texto in instruccion,
+                       f"la propuesta conserva la indicacion: {texto}")
+        igual(llamar.call_count, 2,
+              "la plantilla permite proponer con y sin indicaciones opcionales")
+
 
 def prueba_catalogo():
     titulo("catalogo_visual._limpiar")
@@ -4249,6 +4289,7 @@ def main():
     os.environ["ESTUDIO_ESTADISTICAS"] = os.path.join(
         tempfile.gettempdir(), "estudio_prueba_piezas", "estadisticas.json")
     prueba_feedback_en_prompts()
+    prueba_proponer_catalogo()
     prueba_catalogo()
     prueba_planos_por_sitio()
     prueba_reparto_inventado()
