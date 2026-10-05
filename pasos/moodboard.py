@@ -649,30 +649,21 @@ def importar(carpeta, clave, raiz=None):
     return {"clave": clave, "ejes": devueltos, "carpeta": destino}
 
 
-# ---------------------------------------------- estilo DESCRITO, sin fotogramas
+# ---------------------------------------------- laminas del taller de un estilo
 #
-# En modo light el canal puede describir su estilo con palabras en vez de dar un
-# video. Entonces no hay fotogramas reales, y todo lo de arriba --la clave por
-# contenido, el banco compartido, el aprobado-- deja de tener sentido: la clave
-# de un moodboard es la huella de SUS FOTOGRAMAS, y aqui no hay ninguno.
-#
-# Lo que si tiene sentido es dibujar los mismos ejes a partir de la guia escrita,
-# y que esas laminas pasen a ser las REFERENCIAS del estilo. No hay moodboard
-# encima de nada: las laminas dibujadas son el material de referencia, y desde
-# ahi todo lo de abajo (la lamina de p6, la hoja de personaje, cada plano)
-# funciona sin enterarse de que no vienen de ningun video.
-#
-# Y NO se escribe la guia mirandolas despues. Seria describir una copia, que es
-# justo lo que la cabecera de este modulo dice que no se haga nunca: la guia sale
-# de las palabras del canal y las laminas salen de la guia, en ese orden.
+# En modo light la guia se escribe mirando las imagenes aportadas. Estas mismas
+# imagenes deben llegar al generador de laminas: la API de edicion necesita un
+# adjunto y la guia escrita acompana la referencia visual, no la sustituye.
+# Las salidas se guardan en el taller, sin tocar el banco compartido.
 
 def dibujar_desde_guia(estilo, destino, ejes=None, calidad="medium",
-                       avisar=None, idioma="", peticiones=None):
-    """Dibuja las laminas de un estilo DESCRITO. -> {rutas, ejes, coste_usd}.
+                       avisar=None, idioma="", peticiones=None,
+                       referencias=None):
+    """Dibuja las laminas con la guia y las imagenes aportadas.
 
-    Sin fotogramas de entrada y sin tocar el banco de moodboards: las laminas se
-    dejan en `destino`, que es de quien las pide (el taller de un preset), y lo
-    que devuelve son rutas de ficheros normales.
+    Sin tocar el banco de moodboards: las laminas se dejan en `destino`, que es
+    de quien las pide (el taller de un preset). Las imagenes originales se
+    montan en una hoja de estilo que acompana cada llamada al generador.
 
     'peticiones' es {eje: "lo que hay que corregir"}, igual que en `generar`, y
     manda sobre la descripcion generica de ese eje. LO MISMO EN LOS DOS CAMINOS
@@ -685,6 +676,13 @@ def dibujar_desde_guia(estilo, destino, ejes=None, calidad="medium",
     imagen = medios.motor("imagen_openai/imagen.py")
     reglas = medios.motor("reglas/reglas.py")
     avisar = avisar or (lambda *a, **k: None)
+    if not referencias:
+        raise RuntimeError("no hay imagenes de estilo en el taller para dibujar "
+                           "las referencias; vuelve a adjuntar las originales")
+    faltan = [r for r in referencias if not os.path.isfile(r)]
+    if faltan:
+        raise RuntimeError("faltan imagenes de estilo en el taller: "
+                           + ", ".join(str(r) for r in faltan[:5]))
     pedidos = [e for e in (ejes or EJES) if e in EJES]
     if not pedidos:
         raise RuntimeError("no hay ningun eje que dibujar")
@@ -700,25 +698,28 @@ def dibujar_desde_guia(estilo, destino, ejes=None, calidad="medium",
             "lo unico que describe el dibujo: sin ella las laminas saldrian con "
             "el estilo por defecto del generador")
     bloque = reglas.bloque_prompt("prompt_imagen")
+    cache = os.path.join(destino, "_refs")
+    lamina = _montar([imagen.normalizar(r, cache) for r in referencias],
+                     os.path.join(cache, "originales.png"))
+    if not lamina:
+        raise RuntimeError("no se han podido abrir las imagenes de estilo "
+                           "aportadas al taller")
+    refs = [imagen.normalizar(lamina, cache)]
 
     resultados = [None] * len(pedidos)
     hechas = [0]
     candado = threading.Lock()
 
     def dibujar(indice, eje):
-        # Encabezado NEUTRO en cuanto al medio: sin fotogramas reales, la guia
-        # escrita es lo unico que dice si este canal se dibuja o se fotografia,
-        # y "draw an illustration" la contradiria de entrada. El camino con
-        # video no pasa por aqui y conserva su encabezado de siempre.
+        # Encabezado neutro: las referencias y la guia dicen si el canal se
+        # dibuja o se fotografia; no imponer una ilustracion de entrada.
         prompt = prompt_de_dibujo(
             (EJES.get(eje) or {}).get("prompt") or "", estilo,
             peticiones.get(eje), guia, bloque,
-            con_lamina=False,
+            con_lamina=True,
             encabezado="Produce one single full-frame image for a style "
-                       "reference sheet.")
-        # SIN referencias: no hay ninguna que mandar, y mandar una lamina vacia
-        # es lo que provoca el "Unsupported content type" que no dice nada.
-        png, meta = imagen.generar(prompt, [], quality=calidad,
+                       "reference sheet.", idioma=idioma)
+        png, meta = imagen.generar(prompt, refs, quality=calidad,
                                    tamano="apaisado")
         ruta = os.path.join(destino, f"{eje}.png")
         with open(ruta, "wb") as fh:

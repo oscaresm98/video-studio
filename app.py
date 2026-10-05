@@ -7107,10 +7107,9 @@ def _correr_light_guia(avisar, ctx, encargo):
 def _correr_light_referencias(avisar, ctx, encargo):
     """Las laminas dibujadas, que SON las referencias del estilo.
 
-    No son un moodboard encima de unos fotogramas: no hay fotogramas. Se dibujan
-    a partir de la guia --que a su vez se escribio mirando las imagenes que
-    adjuntaste-- y por eso se escriben en `referencias` y no se aprueba nada: no
-    hay clave que aprobar.
+    Se dibujan a partir de la guia y las imagenes originales que adjuntaste.
+    Se escriben en `referencias` del taller sin pasar por el banco compartido
+    de moodboards.
 
     Y se dibujan en vez de usar tus imagenes tal cual a proposito: una lamina
     dibujada ya esta EN el estilo de salida, mientras que una foto de referencia
@@ -7146,7 +7145,8 @@ def _correr_light_referencias(avisar, ctx, encargo):
     hecho = mod.dibujar_desde_guia({"guia": bloque.get("guia")}, destino,
                                    ejes=pedidos, peticiones=peticiones,
                                    calidad=calidad, avisar=avisar,
-                                   idioma=idioma)
+                                   idioma=idioma,
+                                   referencias=_aportadas_del_taller(ctx))
     # LA LISTA NO SE PISA CUANDO SOLO SE HA REDIBUJADO UNA. Cada lamina se
     # escribe en `<eje>.png`, o sea encima de la que habia, asi que las otras
     # cinco siguen en su sitio y en la lista. Escribir aqui `hecho["rutas"]` a
