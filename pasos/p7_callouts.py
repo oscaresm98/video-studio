@@ -946,38 +946,29 @@ def previsualizar(ruta_png, ruta_svg, destino, ruta_fija=None, mov=None,
     return destino
 
 
-#: El fondo del cuadro compuesto, en el HTML de arriba. Sirve de FIRMA: si la
-#: esquina no se parece a esto, lo que hay dentro no lo ha pintado esta funcion.
+#: El fondo del cuadro compuesto; una imagen puede cubrirlo con cualquier color.
 FONDO_PREVIA = (0x0b, 0x0c, 0x09)
 
 
 def _comprobar_previa(destino):
-    """Levanta si el PNG compuesto no es el cuadro, sino otra cosa.
+    """Rechaza un cuadro completamente uniforme y claro.
 
-    EDGE NO FALLA CUANDO NO ENCUENTRA ALGO: pinta SU pagina de error --«File not
-    found», casi blanca-- y la fotografia. El PNG aparece, `rasterizar` lo da
-    por bueno, y lo que se guarda como cuadro de revision es la captura de un
-    mensaje de un navegador. El 28-08 habia 820 asi repartidas por cuatro
-    versiones, todas de 27 KB, y nadie levanto en ningun sitio: se vieron
-    MIRANDO la pantalla.
-
-    La firma es la esquina. Este HTML pinta el fondo a #0b0c09 y encima el plano
-    escalado, asi que la esquina de un cuadro de verdad es oscura o es imagen;
-    la de la pagina de error es casi blanca. No se mira el peso: un plano
-    legitimamente plano pesa poco y seria un falso positivo.
-
-    Levanta y no borra el PNG: quien llama lo recoge como aviso (ver `ejecutar`)
-    y asi queda en disco para poder mirarlo si alguien pregunta por que.
+    Una esquina clara no identifica una pagina de error: puede ser el fondo
+    de una ilustracion valida. Se comprueba el cuadro ENTERO y solo se rechaza
+    si no tiene contraste visible. Esta comprobacion detecta cuadros vacios;
+    no permite identificar una pagina de error del navegador por su color.
     """
     try:
         from PIL import Image                                 # noqa: PLC0415
-        esquina = Image.open(destino).convert("RGB").load()[5, 5]
+        with Image.open(destino) as imagen:
+            extremos = imagen.convert("RGB").getextrema()
     except Exception:                                         # noqa: BLE001
         return
-    if min(esquina) > 200:
+    if all(minimo > 200 and maximo - minimo <= 3
+           for minimo, maximo in extremos):
         raise RuntimeError(
-            f"la previa salio en blanco ({esquina}): Edge ha fotografiado una "
-            f"pagina de error en vez del cuadro")
+            "la previa salio completamente clara y uniforme, sin contenido "
+            "visible; comprueba el PNG generado por el navegador")
 
 
 # ------------------------------------------------------------------ capturas

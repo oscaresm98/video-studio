@@ -721,6 +721,102 @@ def _png(ruta, color):
     return ruta
 
 
+def probar_imagenes_originales_en_referencias():
+    """Del taller al generador: los adjuntos no se pierden tras escribir la guia."""
+    seccion("LAS IMAGENES ORIGINALES LLEGAN AL GENERADOR DE LAMINAS")
+    import ast
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from PIL import Image
+    import moodboard
+    import p6_assets
+
+    # Ejecutar el paso real sin arrancar el servicio ni cargar cuentas de API.
+    with open(os.path.join(RAIZ, "..", "app.py"), encoding="utf-8") as fh:
+        arbol = ast.parse(fh.read())
+    funcion = next(n for n in arbol.body if isinstance(n, ast.FunctionDef)
+                   and n.name == "_correr_light_referencias")
+    with tempfile.TemporaryDirectory(prefix="referencias_light_") as carpeta:
+        colores = [(180, 90, 60), (60, 120, 180), (90, 160, 90),
+                   (150, 130, 60), (140, 70, 150), (70, 150, 150), (220, 50, 90)]
+        originales = [_png(os.path.join(carpeta, f"f{i}.png"), c)
+                      for i, c in enumerate(colores)]
+        llamadas, cambios = [], {}
+
+        def generar(prompt, referencias, **opciones):
+            if not referencias:
+                raise ValueError("el motor exige al menos un adjunto")
+            with Image.open(referencias[0]) as hoja:
+                presentes = {c for _, c in hoja.getcolors(hoja.width * hoja.height)}
+            ok(set(colores).issubset(presentes),
+               "cada llamada lleva las siete imagenes originales")
+            llamadas.append(prompt)
+            with open(originales[0], "rb") as fh:
+                return fh.read(), {"coste": 0.1}
+
+        motor = SimpleNamespace(normalizar=lambda ruta, cache: ruta,
+                                generar=generar)
+        reglas = SimpleNamespace(bloque_prompt=lambda nombre: "REGLAS")
+        ctx = SimpleNamespace(
+            id="taller", proyecto=SimpleNamespace(raiz=carpeta),
+            estado=SimpleNamespace(
+                params=lambda paso: {"estilo": {"guia": {"guia": "Cartoon"}}},
+                actualizar_params=lambda paso, valores: cambios.update(valores)),
+            bitacora=SimpleNamespace(anotar=lambda *args: None))
+        entorno = {"os": os, "_moodboard": lambda: moodboard,
+                   "_aportadas_del_taller": lambda contexto: originales}
+        exec(compile(ast.Module(body=[funcion], type_ignores=[]), "app.py", "exec"),
+             entorno)
+        correr = entorno[funcion.name]
+        with patch.object(moodboard.medios, "motor", side_effect=lambda ruta:
+                          motor if ruta.startswith("imagen_openai/") else reglas), \
+                patch.object(p6_assets, "guia_escrita", return_value=["GUIA"]):
+            hecho = correr(lambda *args: None, ctx, {"idioma": "es"})
+            igual(len(hecho["rutas"]), len(moodboard.EJES),
+                  "se dibujan las seis laminas y se guardan en el taller")
+            ok(all("Reference image 1" in p and "Spanish" in p for p in llamadas),
+               "el prompt describe el adjunto real y conserva el idioma")
+            eje = next(iter(moodboard.EJES))
+            correr(lambda *args: None, ctx,
+                   {"idioma": "es", "laminas": {eje: "linea mas fina"}})
+            ok("linea mas fina" in llamadas[-1],
+               "corregir una lamina conserva la peticion y los adjuntos")
+            originales.clear()
+            antes = len(llamadas)
+            try:
+                correr(lambda *args: None, ctx, {"idioma": "es"})
+                ok(False, "sin originales se rechaza antes de generar")
+            except RuntimeError as fallo:
+                ok("taller" in str(fallo), "el error identifica el material ausente")
+            igual(len(llamadas), antes, "sin originales no se llama al motor")
+
+
+def probar_previa_con_fondo_claro():
+    seccion("UN FONDO CLARO NO ES UNA PAGINA DE ERROR")
+    from PIL import Image, ImageDraw
+    with tempfile.TemporaryDirectory(prefix="previa_clara_") as carpeta:
+        ruta = os.path.join(carpeta, "previa.png")
+        imagen = Image.new("RGB", (1920, 1080), (237, 243, 251))
+        dibujo = ImageDraw.Draw(imagen)
+        dibujo.rectangle((100, 200, 800, 900), fill=(100, 140, 180),
+                         outline=(0, 0, 0), width=8)
+        imagen.save(ruta)
+        try:
+            light.p7_callouts._comprobar_previa(ruta)
+            ok(True, "una ilustracion con esquina azul clara conserva su previa")
+        except RuntimeError:
+            ok(False, "una esquina clara no debe rechazar una ilustracion")
+        _png(ruta, (11, 12, 9))
+        light.p7_callouts._comprobar_previa(ruta)
+        ok(True, "un cuadro oscuro uniforme sigue siendo valido")
+        _png(ruta, (237, 243, 251))
+        try:
+            light.p7_callouts._comprobar_previa(ruta)
+            ok(False, "un cuadro completamente claro y uniforme se rechaza")
+        except RuntimeError as fallo:
+            ok("uniforme" in str(fallo), "un cuadro vacio se explica sin culpar a Edge")
+
+
 def probar_composicion():
     seccion("LA HOJA DE MUESTRAS SE COMPONE CON EL CODIGO DEL VIDEO")
     from PIL import Image
@@ -799,6 +895,8 @@ def main():
     probar_el_aviso_de_cambiar_de_idioma()
     probar_la_frase_del_estilo_llega_al_prompt()
     probar_lo_que_cuesta_cada_parte()
+    probar_imagenes_originales_en_referencias()
+    probar_previa_con_fondo_claro()
     if argumentos.sin_navegador:
         print("\n  (composicion de la miniatura saltada por --sin-navegador)")
     else:
