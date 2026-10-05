@@ -36,6 +36,9 @@ import struct
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np  # noqa: E402  (la pista de efectos se suma en numpy)
@@ -2313,6 +2316,57 @@ def prueba_cache_referencias():
     shutil.rmtree(base, ignore_errors=True)
 
 
+def prueba_cache_referencias_paralela():
+    titulo("imagen.normalizar: referencias compartidas con hilos simultaneos")
+    imagen = medios.motor("imagen_openai/imagen.py")
+    with tempfile.TemporaryDirectory(prefix="estudio_refs_paralelas_") as base:
+        ruta = os.path.join(base, "luna.png")
+        Image.new("RGB", (32, 16), (20, 80, 140)).save(ruta)
+        cache = os.path.join(base, "_refs")
+        barrera = Barrier(2)
+        temporales = []
+        sustituir = imagen._sustituir
+
+        def sustituir_juntos(temporal, destino, origen):
+            temporales.append(temporal)
+            # Ambos PNG estan cerrados antes de que nadie los mueva.
+            barrera.wait(timeout=10)
+            return sustituir(temporal, destino, origen)
+
+        # Fuerza la colision del nombre antiguo sin alterar el threading real
+        # que usa el ejecutor. No hay llamadas a la API de imagen.
+        with patch.object(imagen, "threading", SimpleNamespace(get_ident=lambda: 61824)), \
+             patch.object(imagen, "_sustituir", side_effect=sustituir_juntos):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                tareas = [pool.submit(imagen.normalizar, ruta, cache) for _ in range(2)]
+                destinos, errores = [], []
+                for tarea in tareas:
+                    try:
+                        destinos.append(tarea.result(timeout=15))
+                    except Exception as exc:
+                        errores.append(str(exc))
+        ok(not errores, f"ambos hilos terminan sin perder el temporal: {errores}")
+        igual(len(set(temporales)), 2, "cada escritura reserva un temporal propio")
+        igual(len(destinos), 2, "ambas llamadas devuelven la referencia")
+        if len(destinos) == 2:
+            igual(destinos[0], destinos[1], "comparten el PNG final de la cache")
+            with Image.open(destinos[0]) as png:
+                igual(png.mode, "RGBA", "el PNG final tiene el modo de la API")
+                igual(png.getpixel((0, 0)), (20, 80, 140, 255),
+                      "la referencia conserva los pixeles completos")
+        ok(not any(n.endswith(".tmp") for n in os.listdir(cache)),
+           "no quedan temporales al terminar")
+
+        cache_fallo = os.path.join(base, "_refs_fallo")
+        with patch.object(Image.Image, "save", side_effect=RuntimeError("fallo al guardar")):
+            try:
+                imagen.normalizar(ruta, cache_fallo)
+                ok(False, "un fallo al guardar se propaga")
+            except RuntimeError as exc:
+                igual(str(exc), "fallo al guardar", "un fallo al guardar se propaga")
+        igual(os.listdir(cache_fallo), [], "el fallo tambien limpia su temporal")
+
+
 def prueba_rehacer_de_verdad():
     """«Rehacer todo» no puede devolver lo mismo sacado de la cache.
 
@@ -4319,6 +4373,7 @@ def main():
     prueba_la_cara_es_de_esa_escena()
     prueba_continuidad()
     prueba_cache_referencias()
+    prueba_cache_referencias_paralela()
     prueba_espaciar()
     prueba_cartelas()
     prueba_direccion()

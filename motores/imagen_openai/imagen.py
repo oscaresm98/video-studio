@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -523,12 +524,21 @@ def normalizar(ruta, cache_dir, lado_max=1024):
     # que manda a buscar un fichero corrupto en el disco -- y en el disco no hay
     # ninguno, porque para cuando alguien va a mirarlo ya se termino de escribir.
     # Visto el 25-08 tumbando una tanda en el plano 89 de 93, con las 88
-    # anteriores ya pagadas. El temporal lleva el pid y el hilo dentro para que
-    # dos escritores simultaneos tampoco se pisen entre ellos.
-    temporal = "%s.%d.%d.tmp" % (destino, os.getpid(),
-                                 threading.get_ident() & 0xffff)
-    img.save(temporal, "PNG")
-    return _sustituir(temporal, destino, ruta)
+    # anteriores ya pagadas. Los ultimos 16 bits del id del hilo NO son unicos:
+    # dos cadenas pueden compartir temporal y una moverlo antes que la otra.
+    # Se reserva un fichero exclusivo, junto al destino para mantener atomico
+    # el replace, y se limpia tambien si falla la escritura.
+    descriptor, temporal = tempfile.mkstemp(
+        dir=cache_dir, prefix=os.path.basename(destino) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(descriptor, "wb") as fh:
+            img.save(fh, "PNG")
+        return _sustituir(temporal, destino, ruta)
+    finally:
+        try:
+            os.remove(temporal)
+        except OSError:
+            pass  # ya se movio, o Windows mantiene abierto el temporal
 
 
 #: Cuanto se insiste ante un destino bloqueado antes de darlo por perdido. Un
